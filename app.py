@@ -30,19 +30,33 @@ def register_user():
     return jsonify({"message": "User registered successfully!"}), 201
 
 # Login
-@app.route('/login', methods=['GET', 'POST'])
+@app.route('/login', methods=['POST'])
 def login():
-    if request.method == 'POST':
-        username = request.form['username']
-        password = request.form['password']
-        user = User.find_by_username(username)
-        if user and user.password == password:
-            login_user(user)
-            return redirect(url_for('dashboard'))
-        else:
-            return "Invalid credentials"
+    data = request.json
+    username = data['username']
+    password = data['password']
+    user = User.find_by_username(username)
+    if user and user.password == password:
+        login_user(user)
+        return jsonify({"message": "Login Successful"}), 200
+    else:
+        return jsonify({"message": "Invalid credentials"}), 401
+    
 
-    return render_template('login.html')
+# old code
+# @app.route('/login', methods=['GET', 'POST'])
+# def login():
+#     if request.method == 'POST':
+#         username = request.form['username']
+#         password = request.form['password']
+#         user = User.find_by_username(username)
+#         if user and user.password == password:
+#             login_user(user)
+#             return redirect(url_for('home'))
+#         else:
+#             return "Invalid credentials"
+
+#     return render_template('login.html')
 
 # Home
 @app.route('/home')
