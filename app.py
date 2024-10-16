@@ -38,11 +38,13 @@ def login():
     user = User.find_by_username(username)
     if user and user.password == password:
         login_user(user)
-        return jsonify({"message": "Login Successful"}), 200
+        user_id = str(user.id)
+
+        return jsonify({"message": "Login Successful", "user_id": user_id}), 200
     else:
         return jsonify({"message": "Invalid username or password"}), 401
     
-# Message
+# Create/save Message
 @app.route('/messages', methods=['Post'])
 def save_message():
     data = request.json
@@ -60,6 +62,20 @@ def save_message():
 
     except Exception as e:
         return jsonify({"error": "Failed to save or update message"}), 500
+
+# Delete Message
+@app.route('/messages/<title>', methods=['DELETE'])
+def delete_message(title):
+    try:
+        result = mongo.db.messages.delete_one({"title": title})
+        
+        if result.deleted_count == 1:
+            return jsonify({"message": "Message deleted successfully"}), 200
+        else:
+            return jsonify({"error": "Message not found"}), 404
+
+    except Exception as e:
+        return jsonify({"error": "Failed to delete message"}), 500
 
 if __name__ == '__main__':
     app.run(debug=True, host='0.0.0.0', port=5001)
