@@ -63,6 +63,31 @@ def save_message():
     except Exception as e:
         return jsonify({"error": "Failed to save or update message"}), 500
 
+# Get messages for specific user
+@app.route('/messages', methods=['GET'])
+def get_messages():
+    try:
+        # Retrieve the user_id from the query parameters
+        user_id = request.args.get('user_id')
+
+        if not user_id:
+            return jsonify({"error": "Missing user_id parameter"}), 400
+        
+        # Query the database to get all messages for this specific user
+        messages = mongo.db.messages.find({"userID": user_id})
+
+        # Convert the cursor to a list of dictionaries to be returned as JSON
+        message_list = []
+        for message in messages:
+            message['_id'] = str(message['_id'])  # Convert ObjectId to string
+            message_list.append(message)
+
+        # Return the list of messages
+        return jsonify(message_list), 200
+
+    except Exception as e:
+        return jsonify({"error": f"An error occurred: {str(e)}"}), 500
+
 # Delete Message
 @app.route('/messages/<title>', methods=['DELETE'])
 def delete_message(title):
