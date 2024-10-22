@@ -2,6 +2,8 @@ from flask import Flask, request, jsonify
 from flask_login import LoginManager, login_user, login_required
 from models import User
 from db import mongo
+from bson import ObjectId
+from bson.errors import InvalidId
 
 # name is built-in variable in python that is used to check if the code is run from the main file or not
 app = Flask(__name__)
@@ -44,24 +46,42 @@ def login():
     else:
         return jsonify({"message": "Invalid username or password"}), 401
     
-# Create/save Message
+# Create Message
 @app.route('/messages', methods=['Post'])
-def save_message():
+def create_message():
     data = request.json
     try:
-        message_id = data.get('message_id')
+        result = mongo.db.messages.insert_one(data)
+        return jsonify({"message": "Message created successfully", "id": str(result.inserted_id)}), 201
+    except Exception as e:
+        print("Error creating message:", str(e))
+        return jsonify({"error": "Failed to create message"}), 500
 
-        # Use the upsert option to insert a new entry if it doesn't exist, or update if it does
-        mongo.db.messages.update_one(
-            {"message_id": message_id},  # Query to check if the document exists
-            {"$set": data},              # Update the document with the new data
-            upsert=True                  # Create a new document if it doesn't exist
-        )
+# Update existing message
+@app.route('/messages/<message_id>', methods=['PUT'])
+def update_message(message_id):
+    try:
+        # Check if message_id is a valid ObjectId
+        object_id = ObjectId(message_id)  # This will raise an InvalidId error if invalid
+        print(f"Valid ObjectId: {object_id}")
+
+        data = request.json
+        result = mongo.db.messages.update_one({"_id": object_id}, {"$set": data})
         
-        return jsonify({"message": "Message saved or updated successfully"}), 200
+        if result.matched_count:
+            print("Message updated successfully")
+            return jsonify({"message": "Message updated successfully"}), 200
+        else:
+            print("Message not found")
+            return jsonify({"error": "Message not found"}), 404
+
+    except InvalidId:
+        print("Invalid ObjectId format")
+        return jsonify({"error": "Invalid message ID format"}), 400
 
     except Exception as e:
-        return jsonify({"error": "Failed to save or update message"}), 500
+        print("Error updating message:", str(e))
+        return jsonify({"error": "Failed to update message"}), 500
 
 # Get messages for specific user
 @app.route('/messages', methods=['GET'])
