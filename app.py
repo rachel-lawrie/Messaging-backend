@@ -4,9 +4,16 @@ from models import User
 from db import mongo
 from bson import ObjectId
 from bson.errors import InvalidId
+from twilio.rest import Client
+from twilio.base.exceptions import TwilioRestException
+from dotenv import load_dotenv
+import os
 
 # name is built-in variable in python that is used to check if the code is run from the main file or not
 app = Flask(__name__)
+
+# load environment variables
+load_dotenv()
 
 # authentication
 app.secret_key = 'supersecretkey'  # Set a secret key for session security
@@ -22,6 +29,12 @@ def load_user(user_id):
 # MongoDB configuration
 app.config["MONGO_URI"] = "mongodb+srv://raedawnlaw:gP5QJVoabpXYJ7qJ@cluster0.es8bz.mongodb.net/messagingdb?retryWrites=true&w=majority&appName=Cluster0"
 mongo.init_app(app)
+
+# Initialize Twilio client
+account_sid = os.getenv('TWILIO_ACCOUNT_SID')
+auth_token = os.getenv('TWILIO_AUTH_TOKEN')
+twilio_phone = os.getenv('TWILIO_PHONE_NUMBER')
+client = Client(account_sid, auth_token)
 
 # Routes
 # Register
@@ -122,5 +135,43 @@ def delete_message(title):
     except Exception as e:
         return jsonify({"error": "Failed to delete message"}), 500
 
+# Send message
+@app.route('/send-messages', methods=['POST'])
+def send_messages():
+    try:
+        data = request.json
+        recipients = data.get('recipients', [])
+        message_content = data.get('message', '')
+        
+        success_count = 0
+        failed_recipients = []
+        
+        for recipient in recipients:
+            try:
+                # Send message via Twilio
+                message = client.messages.create(
+                    body=message_content,
+                    from_=twilio_phone,
+                    to=recipient['phoneNumber']
+                )
+                success_count += 1
+            except TwilioRestException as e:
+                failed_recipients.append({
+                    'phoneNumber': recipient['phoneNumber'],
+                    'error': str(e)
+                })
+        
+        return jsonify({
+            'success': True,
+            'successCount': success_count,
+            'failedRecipients': failed_recipients
+        })
+    
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+    
 if __name__ == '__main__':
     app.run(debug=True, host='0.0.0.0', port=5001)
