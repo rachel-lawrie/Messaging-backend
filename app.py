@@ -59,6 +59,45 @@ def login():
     else:
         return jsonify({"message": "Invalid username or password"}), 401
     
+# Create Group
+@app.route('/groups', methods=['Post'])
+def create_group():
+    data = request.json
+    try:
+        result = mongo.db.groups.insert_one(data)
+        return jsonify({"message": "Group created successfully", "id": str(result.inserted_id)}), 201
+    except Exception as e:
+        print("Error creating message:", str(e))
+        return jsonify({"error": "Failed to create message"}), 500
+
+# Update existing group
+@app.route('/groups/<group_id>', methods=['PUT'])
+def update_group(group_id):
+    try:
+        # Check if group_id is a valid ObjectId
+        object_id = ObjectId(group_id)  # This will raise an InvalidId error if invalid
+        print(f"Valid ObjectId: {object_id}")
+
+        data = request.json
+        result = mongo.db.groups.update_one({"_id": object_id}, {"$set": data})
+        
+        if result.matched_count:
+            print("Group updated successfully")
+            return jsonify({"message": "Group updated successfully"}), 200
+        else:
+            print("Group not found")
+            return jsonify({"error": "Group not found"}), 404
+
+    except InvalidId:
+        print("Invalid ObjectId format")
+        return jsonify({"error": "Invalid group ID format"}), 400
+
+    except Exception as e:
+        print("Error updating group:", str(e))
+        return jsonify({"error": "Failed to update group"}), 500
+
+    
+
 # Create Message
 @app.route('/messages', methods=['Post'])
 def create_message():
