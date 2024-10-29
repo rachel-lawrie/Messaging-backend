@@ -69,6 +69,31 @@ def create_group():
     except Exception as e:
         print("Error creating message:", str(e))
         return jsonify({"error": "Failed to create message"}), 500
+    
+# Get groups for specific user
+@app.route('/groups', methods=['GET'])
+def get_groups():
+    try:
+        # Retrieve the user_id from the query parameters
+        user_id = request.args.get('user_id')
+
+        if not user_id:
+            return jsonify({"error": "Missing user_id parameter"}), 400
+        
+        # Query the database to get all messages for this specific user
+        groups = mongo.db.groups.find({"userID": user_id})
+
+        # Convert the cursor to a list of dictionaries to be returned as JSON
+        groups_list = []
+        for group in groups:
+            group['_id'] = str(group['_id'])  # Convert ObjectId to string
+            groups_list.append(group)
+
+        # Return the list of messages
+        return jsonify(groups_list), 200
+
+    except Exception as e:
+        return jsonify({"error": f"An error occurred: {str(e)}"}), 500
 
 # Update existing group
 @app.route('/groups/<group_id>', methods=['PUT'])
