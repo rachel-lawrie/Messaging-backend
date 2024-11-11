@@ -1,5 +1,6 @@
 from flask import Flask, request, jsonify
-from flask_login import LoginManager, login_user, login_required
+from flask_jwt_extended import JWTManager, create_access_token, jwt_required, get_jwt_identity
+from flask_cors import CORS
 from models import User
 from db import mongo
 from bson import ObjectId
@@ -11,20 +12,14 @@ import os
 
 # name is built-in variable in python that is used to check if the code is run from the main file or not
 app = Flask(__name__)
+CORS(app, supports_credentials=True)
 
 # load environment variables
 load_dotenv()
 
 # authentication
-app.secret_key = 'supersecretkey'  # Set a secret key for session security
-
-login_manager = LoginManager()
-login_manager.init_app(app)
-
-# User loader for Flask-Login - review this, is this being used anywhere?
-@login_manager.user_loader
-def load_user(user_id):
-    return User.find_by_username(username)
+app.config['JWT_SECRET_KEY'] = os.getenv('SECRET_KEY')
+jwt = JWTManager(app)
 
 # MongoDB configuration
 app.config["MONGO_URI"] = "mongodb+srv://raedawnlaw:gP5QJVoabpXYJ7qJ@cluster0.es8bz.mongodb.net/messagingdb?retryWrites=true&w=majority&appName=Cluster0"
@@ -48,19 +43,23 @@ def register_user():
 @app.route('/login', methods=['POST'])
 def login():
     data = request.json
-    username = data['username']
-    password = data['password']
+    username = data.get('username')
+    password = data.get('password')
+    
     user = User.find_by_username(username)
-    if user and user.password == password:
-        login_user(user)
-        user_id = str(user.id)
+    if user and user.password == password:  # In production, use password hashing!
+        access_token = create_access_token(identity=str(user.id))
+        return jsonify({
+            "message": "Login Successful",
+            "token": access_token,
+            "user_id": str(user.id)
+        }), 200
+    return jsonify({"message": "Invalid username or password"}), 401
 
-        return jsonify({"message": "Login Successful", "user_id": user_id}), 200
-    else:
-        return jsonify({"message": "Invalid username or password"}), 401
     
 # Create Group
 @app.route('/groups', methods=['Post'])
+@jwt_required()
 def create_group():
     data = request.json
     try:
@@ -72,6 +71,7 @@ def create_group():
     
 # Get groups for specific user
 @app.route('/groups', methods=['GET'])
+@jwt_required()
 def get_groups():
     try:
         # Retrieve the user_id from the query parameters
@@ -97,6 +97,7 @@ def get_groups():
 
 # Update existing group
 @app.route('/groups/<group_id>', methods=['PUT'])
+@jwt_required()
 def update_group(group_id):
     try:
         # Check if group_id is a valid ObjectId
@@ -125,6 +126,7 @@ def update_group(group_id):
 
 # Create Message
 @app.route('/messages', methods=['Post'])
+@jwt_required()
 def create_message():
     data = request.json
     try:
@@ -136,6 +138,7 @@ def create_message():
 
 # Update existing message
 @app.route('/messages/<message_id>', methods=['PUT'])
+@jwt_required()
 def update_message(message_id):
     try:
         # Check if message_id is a valid ObjectId
@@ -162,6 +165,7 @@ def update_message(message_id):
 
 # Get messages for specific user
 @app.route('/messages', methods=['GET'])
+@jwt_required()
 def get_messages():
     try:
         # Retrieve the user_id from the query parameters
@@ -187,6 +191,7 @@ def get_messages():
 
 # Delete Message
 @app.route('/messages/<title>', methods=['DELETE'])
+@jwt_required()
 def delete_message(title):
     try:
         result = mongo.db.messages.delete_one({"title": title})
@@ -201,6 +206,7 @@ def delete_message(title):
 
 # Send message
 @app.route('/send-messages', methods=['POST'])
+@jwt_required()
 def send_messages():
     try:
         data = request.json
