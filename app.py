@@ -9,6 +9,7 @@ from twilio.rest import Client
 from twilio.base.exceptions import TwilioRestException
 from dotenv import load_dotenv
 import os
+import bcrypt
 
 # name is built-in variable in python that is used to check if the code is run from the main file or not
 app = Flask(__name__)
@@ -31,13 +32,60 @@ auth_token = os.getenv('TWILIO_AUTH_TOKEN')
 twilio_phone = os.getenv('TWILIO_PHONE_NUMBER')
 client = Client(account_sid, auth_token)
 
+# Validate password
+def validate_password(password):
+    """
+    Validate password strength
+    Returns (bool, str) - (is_valid, error_message)
+    """
+    if len(password) < 8:
+        return False, "Password must be at least 8 characters long"
+    if not any(c.isupper() for c in password):
+        return False, "Password must contain at least one uppercase letter"
+    if not any(c.islower() for c in password):
+        return False, "Password must contain at least one lowercase letter"
+    if not any(c.isdigit() for c in password):
+        return False, "Password must contain at least one number"
+    return True, ""
+
 # Routes
 # Register
 @app.route('/register', methods=['POST'])
 def register_user():
     data = request.json
-    mongo.db.users.insert_one(data)
-    return jsonify({"message": "User registered successfully!"}), 201
+    username = data.get('username')
+    email = data.get('email')
+    password = data.get('password')
+
+    # Check if all required fields are present
+    if not username or not password or not email:
+        return jsonify({"message": "Missing required fields"}), 400
+
+    # Check if username already exists
+    if User.find_by_username(username):
+        return jsonify({"message": "Username already exists"}), 400
+
+    # Check if email already exists
+    if User.find_by_email(email):
+        return jsonify({"message": "Email already exists"}), 400
+
+    # Validate password
+    is_valid, error_message = validate_password(password)
+    if not is_valid:
+        return jsonify({"message": error_message}), 400
+
+    # Create new user with hashed password
+    try:
+        user = User.create_user(username, email, password)
+        access_token = create_access_token(identity=str(user.id))
+        return jsonify({
+            "message": "User created successfully",
+            "token": access_token,
+            "user_id": str(user.id)
+        }), 201
+    except Exception as e:
+        print(f"Error creating user: {e}")  # For debugging
+        return jsonify({"message": "Error creating user"}), 500
 
 # Login
 @app.route('/login', methods=['POST'])

@@ -1,6 +1,7 @@
 from flask_login import UserMixin
 from db import mongo
 from bson import ObjectId
+import bcrypt
 
 class User(UserMixin):
     def __init__(self, user_id, username, password):
@@ -9,15 +10,29 @@ class User(UserMixin):
         self.password = password  # In production, this should be hashed!
 
     @staticmethod
-    def get(user_id):
-        """Retrieve user from MongoDB by user_id."""
-        try:
-            user_data = mongo.db.users.find_one({"_id": ObjectId(user_id)})
-            if user_data:
-                return User(str(user_data["_id"]), user_data["username"], user_data["password"])
-        except:
-            return None
-        return None
+    def hash_password(password):
+        # Convert the password to bytes and hash it
+        password_bytes = password.encode('utf-8')
+        salt = bcrypt.gensalt()
+        return bcrypt.hashpw(password_bytes, salt)
+    
+    def check_password(self, password):
+        # Check if password matches hash
+        return bcrypt.checkpw(password.encode('utf-8'), self.password_hash)
+    
+
+    @staticmethod
+    def create_user(username, password):
+        # Hash the password before storing
+        password_hash = User.hash_password(password)
+        user_data = {
+            "username": username,
+            "password": password_hash
+        }
+        # Insert into MongoDB
+        result = mongo.db.users.insert_one(user_data)
+        return User(str(result.inserted_id), username, password_hash)
+    
 
     @staticmethod
     def find_by_username(username):
