@@ -76,7 +76,7 @@ def register_user():
 
     # Create new user with hashed password
     try:
-        user = User.create_user(username, email, password)
+        user = User.create_user(username, password, email)
         access_token = create_access_token(identity=str(user.id))
         return jsonify({
             "message": "User created successfully",
@@ -95,7 +95,7 @@ def login():
     password = data.get('password')
     
     user = User.find_by_username(username)
-    if user and user.password == password:  # In production, use password hashing!
+    if user and user.check_password(password):  # This uses the bcrypt check
         access_token = create_access_token(identity=str(user.id))
         return jsonify({
             "message": "Login Successful",

@@ -18,16 +18,17 @@ class User(UserMixin):
     
     def check_password(self, password):
         # Check if password matches hash
-        return bcrypt.checkpw(password.encode('utf-8'), self.password_hash)
+        return bcrypt.checkpw(password.encode('utf-8'), self.password)
     
 
     @staticmethod
-    def create_user(username, password):
+    def create_user(username, password, email):
         # Hash the password before storing
         password_hash = User.hash_password(password)
         user_data = {
             "username": username,
-            "password": password_hash
+            "password": password_hash,
+            "email": email
         }
         # Insert into MongoDB
         result = mongo.db.users.insert_one(user_data)
@@ -41,3 +42,12 @@ class User(UserMixin):
         if user_data:
             return User(str(user_data["_id"]), user_data["username"], user_data["password"])
         return None
+    
+    @staticmethod
+    def find_by_email(email):
+        """Retrieve user from MongoDB by email."""
+        user_data = mongo.db.users.find_one({"email": email})
+        if user_data:
+            return User(str(user_data["_id"]), user_data["username"], user_data["password"])
+        return None
+    
