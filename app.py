@@ -253,43 +253,70 @@ def delete_message(title):
         return jsonify({"error": "Failed to delete message"}), 500
 
 # Send message
-@app.route('/send-messages', methods=['POST'])
+@app.route('/messages/<message_id>', methods=['PUT'])
 @jwt_required()
-def send_messages():
+def send_messages(message_id):
     try:
+        # Check if message_id is a valid ObjectId
+        object_id = ObjectId(message_id)  # This will raise an InvalidId error if invalid
+        print(f"Valid ObjectId: {object_id}")
+
         data = request.json
-        recipients = data.get('recipients', [])
-        message_content = data.get('message', '')
+        result = mongo.db.messages.update_one({"_id": object_id}, {"$set": data})
         
-        success_count = 0
-        failed_recipients = []
-        
-        for recipient in recipients:
-            try:
-                # Send message via Twilio
-                message = client.messages.create(
-                    body=message_content,
-                    from_=twilio_phone,
-                    to=recipient['phoneNumber']
-                )
-                success_count += 1
-            except TwilioRestException as e:
-                failed_recipients.append({
-                    'phoneNumber': recipient['phoneNumber'],
-                    'error': str(e)
-                })
-        
-        return jsonify({
-            'success': True,
-            'successCount': success_count,
-            'failedRecipients': failed_recipients
-        })
-    
+        if result.matched_count:
+            print("Message sent!")
+            return jsonify({"message": "Message sent!"}), 200
+        else:
+            print("Message not sent")
+            return jsonify({"error": "Message not sent"}), 404
+
+    except InvalidId:
+        print("Invalid ObjectId format")
+        return jsonify({"error": "Invalid message ID format"}), 400
+
     except Exception as e:
-        return jsonify({
-            'success': False,
-            'error': str(e)
-        }), 500
+        print("Error sending message:", str(e))
+        return jsonify({"error": "Failed to send message"}), 500
+
+#     For when messaging service is up:
+# @app.route('/send-messages', methods=['POST'])
+# @jwt_required()
+# def send_messages(): 
+#       try:
+#         data = request.json
+#         recipients = data.get('recipients', [])
+#         message_content = data.get('message', '')
+        
+#         success_count = 0
+#         failed_recipients = []
+        
+#         for recipient in recipients:
+#             try:
+#                 # Send message via Twilio
+#                 message = client.messages.create(
+#                     body=message_content,
+#                     from_=twilio_phone,
+#                     to=recipient['phoneNumber']
+#                 )
+#                 success_count += 1
+#             except TwilioRestException as e:
+#                 failed_recipients.append({
+#                     'phoneNumber': recipient['phoneNumber'],
+#                     'error': str(e)
+#                 })
+        
+#         return jsonify({
+#             'success': True,
+#             'successCount': success_count,
+#             'failedRecipients': failed_recipients
+#         })
+    
+#     except Exception as e:
+#         return jsonify({
+#             'success': False,
+#             'error': str(e)
+#         }), 500
     
 if __name__ == '__main__':
     app.run(debug=True, host='0.0.0.0', port=5001)
