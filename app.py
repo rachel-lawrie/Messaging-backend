@@ -11,12 +11,14 @@ from dotenv import load_dotenv
 import os
 import bcrypt
 
+# load environment variables
+load_dotenv()
+
 # name is built-in variable in python that is used to check if the code is run from the main file or not
 app = Flask(__name__)
 CORS(app, supports_credentials=True)
 
-# load environment variables
-load_dotenv()
+
 
 # authentication
 app.config['JWT_SECRET_KEY'] = os.getenv('SECRET_KEY')
@@ -26,11 +28,12 @@ jwt = JWTManager(app)
 app.config["MONGO_URI"] = "mongodb+srv://raedawnlaw:gP5QJVoabpXYJ7qJ@cluster0.es8bz.mongodb.net/messagingdb?retryWrites=true&w=majority&appName=Cluster0"
 mongo.init_app(app)
 
-# Initialize Twilio client
+# Initialize Twilio client using env
 account_sid = os.getenv('TWILIO_ACCOUNT_SID')
 auth_token = os.getenv('TWILIO_AUTH_TOKEN')
 twilio_phone = os.getenv('TWILIO_PHONE_NUMBER')
 client = Client(account_sid, auth_token)
+messagingServiceSid = os.getenv('MESSAGING_SERVICE_SID')
 
 # Validate password
 def validate_password(password):
@@ -252,38 +255,65 @@ def delete_message(title):
     except Exception as e:
         return jsonify({"error": "Failed to delete message"}), 500
 
-# Send message
-@app.route('/messages/<message_id>', methods=['PUT'])
+# Send message (for when Twilio not working)
+# testing twilio again
+@app.route('/twilio', methods=['POST'])
 @jwt_required()
-def send_messages(message_id):
-    try:
-        # Check if message_id is a valid ObjectId
-        object_id = ObjectId(message_id)  # This will raise an InvalidId error if invalid
-        print(f"Valid ObjectId: {object_id}")
+def send_messages():
 
-        data = request.json
-        result = mongo.db.messages.update_one({"_id": object_id}, {"$set": data})
+    data = request.json
+    recipients = data.get('recipients', [])
+    message_content = data.get('message', '')
+    
+    for recipient in recipients:
+        try:
+            message = client.messages.create(
+                body=message_content,
+                messaging_service_sid=messagingServiceSid,
+                to=recipient['phoneNumber']
+            )
+            print(message.status, message.sid)
+            return {"status": message.status, "sid": message.sid}, 200
+        except Exception as e:
+            print(f"Error: {e}")
+            return {"error": str(e)}, 500
+
+if __name__ == '__main__':
+    app.run(debug=True, host='0.0.0.0', port=5001)
+
+
+
+# @app.route('/messages/<message_id>', methods=['PUT'])
+# @jwt_required()
+# def send_messages(message_id):
+#     try:
+#         # Check if message_id is a valid ObjectId
+#         object_id = ObjectId(message_id)  # This will raise an InvalidId error if invalid
+#         print(f"Valid ObjectId: {object_id}")
+
+#         data = request.json
+#         result = mongo.db.messages.update_one({"_id": object_id}, {"$set": data})
         
-        if result.matched_count:
-            print("Message sent!")
-            return jsonify({"message": "Message sent!"}), 200
-        else:
-            print("Message not sent")
-            return jsonify({"error": "Message not sent"}), 404
+#         if result.matched_count:
+#             print("Message sent!")
+#             return jsonify({"message": "Message sent!"}), 200
+#         else:
+#             print("Message not sent")
+#             return jsonify({"error": "Message not sent"}), 404
 
-    except InvalidId:
-        print("Invalid ObjectId format")
-        return jsonify({"error": "Invalid message ID format"}), 400
+#     except InvalidId:
+#         print("Invalid ObjectId format")
+#         return jsonify({"error": "Invalid message ID format"}), 400
 
-    except Exception as e:
-        print("Error sending message:", str(e))
-        return jsonify({"error": "Failed to send message"}), 500
+#     except Exception as e:
+#         print("Error sending message:", str(e))
+#         return jsonify({"error": "Failed to send message"}), 500
 
-#     For when messaging service is up:
+# For when messaging service is up:
 # @app.route('/send-messages', methods=['POST'])
 # @jwt_required()
-# def send_messages(): 
-#       try:
+# def send_messages():
+#     try:
 #         data = request.json
 #         recipients = data.get('recipients', [])
 #         message_content = data.get('message', '')
@@ -297,9 +327,21 @@ def send_messages(message_id):
 #                 message = client.messages.create(
 #                     body=message_content,
 #                     from_=twilio_phone,
-#                     to=recipient['phoneNumber']
-#                 )
+#                     to='+15712143080') # recipient['phoneNumber'] <- replace phone number with this
+                
 #                 success_count += 1
+
+#                 if message_id:
+#                     object_id = ObjectId(message_id)  # Validate ObjectId
+#                     print(f"Valid ObjectId: {object_id}")
+
+#                     # Add/update the `timeSent` field for the message
+#                     result = mongo.db.messages.update_one(
+#                         {"_id": object_id},
+#                         {"$set": {"timeSent": datetime.utcnow()}}
+#                     )
+#                     print(f"MongoDB Update Result: {result.modified_count}")
+
 #             except TwilioRestException as e:
 #                 failed_recipients.append({
 #                     'phoneNumber': recipient['phoneNumber'],
@@ -317,6 +359,6 @@ def send_messages(message_id):
 #             'success': False,
 #             'error': str(e)
 #         }), 500
-    
+
 if __name__ == '__main__':
     app.run(debug=True, host='0.0.0.0', port=5001)
