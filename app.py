@@ -264,6 +264,8 @@ def send_messages():
     data = request.json
     recipients = data.get('recipients', [])
     message_content = data.get('message', '')
+
+    responses = []
     
     for recipient in recipients:
         try:
@@ -272,11 +274,22 @@ def send_messages():
                 messaging_service_sid=messagingServiceSid,
                 to=recipient['phoneNumber']
             )
-            print(message.status, message.sid)
-            return {"status": message.status, "sid": message.sid}, 200
+
+            twilio_response = {
+                "sid": message.sid,
+                "status": message.status,
+                "error_code": message.error_code,
+                "error_message": message.error_message,
+            }
+            responses.append({"recipient": recipient["phoneNumber"], "twilio_response": twilio_response})
+            print("Message sent to:", recipient["phoneNumber"])
+
         except Exception as e:
-            print(f"Error: {e}")
-            return {"error": str(e)}, 500
+            print(f"Error for {recipient['phoneNumber']}: {e}")
+            responses.append({"recipient": recipient["phoneNumber"], "error": str(e)})
+
+    # Return the collected responses after processing all recipients
+    return {"responses": responses}, 200
 
 if __name__ == '__main__':
     app.run(debug=True, host='0.0.0.0', port=5001)
