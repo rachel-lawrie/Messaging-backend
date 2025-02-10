@@ -4,9 +4,10 @@ from bson import ObjectId
 import bcrypt
 
 class User(UserMixin):
-    def __init__(self, user_id, username, password):
+    def __init__(self, user_id, username, email, password):
         self.id = user_id  # This needs to be a string
         self.username = username
+        self.email = email
         self.password = password  # In production, this should be hashed!
 
     @staticmethod
@@ -32,7 +33,7 @@ class User(UserMixin):
         }
         # Insert into MongoDB
         result = mongo.db.users.insert_one(user_data)
-        return User(str(result.inserted_id), username, password_hash)
+        return User(str(result.inserted_id), username, email, password_hash)
     
 
     @staticmethod
@@ -40,7 +41,12 @@ class User(UserMixin):
         """Retrieve user from MongoDB by username."""
         user_data = mongo.db.users.find_one({"username": username})
         if user_data:
-            return User(str(user_data["_id"]), user_data["username"], user_data["password"])
+            return User(
+            str(user_data["_id"]), 
+            user_data["username"], 
+            user_data["email"],
+            user_data["password"]
+        )
         return None
     
     @staticmethod
@@ -48,6 +54,11 @@ class User(UserMixin):
         """Retrieve user from MongoDB by email."""
         user_data = mongo.db.users.find_one({"email": email})
         if user_data:
-            return User(str(user_data["_id"]), user_data["username"], user_data["password"])
+            return User(
+            str(user_data["_id"]), 
+            user_data["username"], 
+            user_data["email"],
+            user_data["password"]
+        )
         return None
     

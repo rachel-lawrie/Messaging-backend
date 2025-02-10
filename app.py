@@ -1,5 +1,5 @@
-from flask import Flask, request, jsonify
-from flask_jwt_extended import JWTManager, create_access_token, jwt_required, get_jwt_identity
+from flask import abort, Flask, request, jsonify
+from flask_jwt_extended import JWTManager, create_access_token, jwt_required
 from flask_cors import CORS
 from models import User
 from db import mongo
@@ -7,15 +7,19 @@ from bson import ObjectId
 from bson.errors import InvalidId
 from twilio.rest import Client
 from twilio.base.exceptions import TwilioRestException
+from twilio.request_validator import RequestValidator
 from dotenv import load_dotenv
+from functools import wraps
 import os
-import bcrypt
+from werkzeug.middleware.proxy_fix import ProxyFix
+
 
 # load environment variables
 load_dotenv()
 
 # name is built-in variable in python that is used to check if the code is run from the main file or not
 app = Flask(__name__)
+app.wsgi_app = ProxyFix(app.wsgi_app, x_proto=1, x_host=1)
 CORS(app, supports_credentials=True)
 
 
@@ -34,6 +38,38 @@ auth_token = os.getenv('TWILIO_AUTH_TOKEN')
 twilio_phone = os.getenv('TWILIO_PHONE_NUMBER')
 client = Client(account_sid, auth_token)
 messagingServiceSid = os.getenv('MESSAGING_SERVICE_SID')
+webhook_address = os.getenv('WEBHOOK_ADDRESS')
+
+# Validate Twilio request
+def validate_twilio_request(f):
+    """Validates that incoming requests genuinely originated from Twilio"""
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        # Create an instance of the RequestValidator class
+        validator = RequestValidator(auth_token)
+        print("token:", auth_token)
+        print("Request URL:", request.url)
+        print("Request Data:", request.form)
+        print("Twilio Signature:", request.headers.get('X-TWILIO-SIGNATURE', ''))
+        calculated_signature = validator.compute_signature(request.url, request.form)
+        print("Calculated Signature:", calculated_signature)
+        print("headers:", request.headers)
+        print("data:", request.get_data())
+
+        # Validate the request using its URL, POST data,
+        # and X-TWILIO-SIGNATURE header
+        request_valid = validator.validate(
+            request.url,
+            request.form,
+            request.headers.get('X-TWILIO-SIGNATURE', ''))
+
+        # Continue processing the request if it's valid, return a 403 error if
+        # it's not
+        if request_valid:
+            return f(*args, **kwargs)
+        else:
+            return abort(403)
+    return decorated_function
 
 # Validate password
 def validate_password(password):
@@ -264,13 +300,14 @@ def send_messages():
     data = request.json
     recipients = data.get('recipients', [])
     message_content = data.get('message', '')
+    response_id = data.get('responseId', '')
 
     responses = []
     
     for recipient in recipients:
         try:
             message = client.messages.create(
-                body=message_content,
+                body= f"{message_content} Respond '{response_id}' to confirm your attendance.",
                 messaging_service_sid=messagingServiceSid,
                 to=recipient['phoneNumber']
             )
@@ -290,11 +327,6 @@ def send_messages():
 
     # Return the collected responses after processing all recipients
     return {"responses": responses}, 200
-
-if __name__ == '__main__':
-    app.run(debug=True, host='0.0.0.0', port=5001)
-
-
 
 # @app.route('/messages/<message_id>', methods=['PUT'])
 # @jwt_required()
@@ -372,6 +404,53 @@ if __name__ == '__main__':
 #             'success': False,
 #             'error': str(e)
 #         }), 500
+
+@app.route('/twilio-webhook', methods=['POST'])
+@validate_twilio_request
+def twilio_webhook():
+    try:
+        data = request.form
+        print("Twilio webhook received:", data)
+
+        # Extract the response body
+        response_body = data.get('Body', '').strip()  # Remove extra spaces
+        print("Response body:", response_body)
+
+        from_number = data.get('From', '')
+        print("From:", from_number)
+
+        # Query the database to check for a matching responseId
+        matching_message = mongo.db.messages.find_one({"responseId": response_body})
+
+        if matching_message:
+
+            print("Matching message found:", matching_message)
+            # Process the matching message (e.g., update status, log response)
+            matching_contact = next(
+                (contact for contact in matching_message.get("to", []) if contact["phoneNumber"] == from_number),
+                None
+            )
+
+            if matching_contact:
+                print("Matching contact found:", matching_contact)
+
+                # Use $addToSet to update or create 'responded_yes'
+                update_result = mongo.db.messages.update_one(
+                    {"_id": matching_message["_id"]},
+                    {"$addToSet": {"responded_yes": matching_contact}}  # Add to array or create it if not present
+                )
+                return jsonify({"message": "Contact added to responded_yes."}), 200
+        
+            else:
+                print("No matching contact found in the 'to' array.")
+                return jsonify({"message": "No matching contact found."}), 404
+        else:
+            print("No matching message found for responseId:", response_body)
+            return jsonify({"message": "No matching message found."}), 404
+
+    except Exception as e:
+        print("Error processing webhook:", str(e))
+        return jsonify({"error": str(e)}), 500
 
 if __name__ == '__main__':
     app.run(debug=True, host='0.0.0.0', port=5001)
