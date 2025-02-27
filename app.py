@@ -29,7 +29,7 @@ app.config['JWT_SECRET_KEY'] = os.getenv('SECRET_KEY')
 jwt = JWTManager(app)
 
 # MongoDB configuration
-app.config["MONGO_URI"] = "mongodb+srv://raedawnlaw:gP5QJVoabpXYJ7qJ@cluster0.es8bz.mongodb.net/messagingdb?retryWrites=true&w=majority&appName=Cluster0"
+app.config["MONGO_URI"] = os.getenv('MONGO_URI')
 mongo.init_app(app)
 
 # Initialize Twilio client using env
@@ -71,57 +71,35 @@ def validate_twilio_request(f):
             return abort(403)
     return decorated_function
 
-# Validate password
-def validate_password(password):
-    """
-    Validate password strength
-    Returns (bool, str) - (is_valid, error_message)
-    """
-    if len(password) < 8:
-        return False, "Password must be at least 8 characters long"
-    if not any(c.isupper() for c in password):
-        return False, "Password must contain at least one uppercase letter"
-    if not any(c.islower() for c in password):
-        return False, "Password must contain at least one lowercase letter"
-    if not any(c.isdigit() for c in password):
-        return False, "Password must contain at least one number"
-    return True, ""
-
 # Routes
 # Register
 @app.route('/register', methods=['POST'])
 def register_user():
-    data = request.json
-    username = data.get('username')
-    email = data.get('email')
-    password = data.get('password')
-
-    # Check if all required fields are present
-    if not username or not password or not email:
-        return jsonify({"message": "Missing required fields"}), 400
-
-    # Check if username already exists
-    if User.find_by_username(username):
-        return jsonify({"message": "Username already exists"}), 400
-
-    # Check if email already exists
-    if User.find_by_email(email):
-        return jsonify({"message": "Email already exists"}), 400
-
-    # Validate password
-    is_valid, error_message = validate_password(password)
-    if not is_valid:
-        return jsonify({"message": error_message}), 400
-
-    # Create new user with hashed password
     try:
+        data = request.json
+        username = data.get('username')
+        email = data.get('email')
+        password = data.get('password')
+
+        # Check if all required fields are present
+        if not username or not password or not email:
+            return jsonify({"message": "Missing required fields"}), 400
+
+        # Create new user - this will handle all other validations
         user = User.create_user(username, password, email)
+        
+        # Generate JWT token
         access_token = create_access_token(identity=str(user.id))
+        
         return jsonify({
             "message": "User created successfully",
             "token": access_token,
             "user_id": str(user.id)
         }), 201
+        
+    except ValueError as e:
+        # This will catch validation errors from User.create_user
+        return jsonify({"message": str(e)}), 400
     except Exception as e:
         print(f"Error creating user: {e}")  # For debugging
         return jsonify({"message": "Error creating user"}), 500
@@ -209,8 +187,6 @@ def update_group(group_id):
         print("Error updating group:", str(e))
         return jsonify({"error": "Failed to update group"}), 500
 
-    
-
 # Create Message
 @app.route('/messages', methods=['Post'])
 @jwt_required()
@@ -291,8 +267,7 @@ def delete_message(title):
     except Exception as e:
         return jsonify({"error": "Failed to delete message"}), 500
 
-# Send message (for when Twilio not working)
-# testing twilio again
+# Send message
 @app.route('/twilio', methods=['POST'])
 @jwt_required()
 def send_messages():
@@ -327,83 +302,6 @@ def send_messages():
 
     # Return the collected responses after processing all recipients
     return {"responses": responses}, 200
-
-# @app.route('/messages/<message_id>', methods=['PUT'])
-# @jwt_required()
-# def send_messages(message_id):
-#     try:
-#         # Check if message_id is a valid ObjectId
-#         object_id = ObjectId(message_id)  # This will raise an InvalidId error if invalid
-#         print(f"Valid ObjectId: {object_id}")
-
-#         data = request.json
-#         result = mongo.db.messages.update_one({"_id": object_id}, {"$set": data})
-        
-#         if result.matched_count:
-#             print("Message sent!")
-#             return jsonify({"message": "Message sent!"}), 200
-#         else:
-#             print("Message not sent")
-#             return jsonify({"error": "Message not sent"}), 404
-
-#     except InvalidId:
-#         print("Invalid ObjectId format")
-#         return jsonify({"error": "Invalid message ID format"}), 400
-
-#     except Exception as e:
-#         print("Error sending message:", str(e))
-#         return jsonify({"error": "Failed to send message"}), 500
-
-# For when messaging service is up:
-# @app.route('/send-messages', methods=['POST'])
-# @jwt_required()
-# def send_messages():
-#     try:
-#         data = request.json
-#         recipients = data.get('recipients', [])
-#         message_content = data.get('message', '')
-        
-#         success_count = 0
-#         failed_recipients = []
-        
-#         for recipient in recipients:
-#             try:
-#                 # Send message via Twilio
-#                 message = client.messages.create(
-#                     body=message_content,
-#                     from_=twilio_phone,
-#                     to='+15712143080') # recipient['phoneNumber'] <- replace phone number with this
-                
-#                 success_count += 1
-
-#                 if message_id:
-#                     object_id = ObjectId(message_id)  # Validate ObjectId
-#                     print(f"Valid ObjectId: {object_id}")
-
-#                     # Add/update the `timeSent` field for the message
-#                     result = mongo.db.messages.update_one(
-#                         {"_id": object_id},
-#                         {"$set": {"timeSent": datetime.utcnow()}}
-#                     )
-#                     print(f"MongoDB Update Result: {result.modified_count}")
-
-#             except TwilioRestException as e:
-#                 failed_recipients.append({
-#                     'phoneNumber': recipient['phoneNumber'],
-#                     'error': str(e)
-#                 })
-        
-#         return jsonify({
-#             'success': True,
-#             'successCount': success_count,
-#             'failedRecipients': failed_recipients
-#         })
-    
-#     except Exception as e:
-#         return jsonify({
-#             'success': False,
-#             'error': str(e)
-#         }), 500
 
 @app.route('/twilio-webhook', methods=['POST'])
 @validate_twilio_request
