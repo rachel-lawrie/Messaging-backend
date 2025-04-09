@@ -34,7 +34,7 @@ class User(UserMixin):
             return False, "Username contains invalid characters"
         
         # Check uniqueness (case-insensitive)
-        existing_user = mongo.db.users.find_one({"username_lower": username.lower()})
+        existing_user = mongo.db.users.find_one({"username": username.lower()})
         if existing_user:
             return False, "Username already exists"
         
