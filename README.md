@@ -17,3 +17,5 @@ MESSAGING_SERVICE_SID=your_messaging_service_sid
 SECRET_KEY=your_secret_key
 WEBHOOK_ADDRESS=your_webhook_address
 MONGO_URI=your_mongodb_connection_string
+
+For local, run ngrok tunnel. 

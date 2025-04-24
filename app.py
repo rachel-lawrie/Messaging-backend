@@ -199,6 +199,8 @@ def create_message():
         print("Error creating message:", str(e))
         return jsonify({"error": "Failed to create message"}), 500
 
+
+
 # Update existing message
 @app.route('/messages/<message_id>', methods=['PUT'])
 @jwt_required()
@@ -249,6 +251,28 @@ def get_messages():
         # Return the list of messages
         return jsonify(message_list), 200
 
+    except Exception as e:
+        return jsonify({"error": f"An error occurred: {str(e)}"}), 500
+
+# Get single message by ID
+@app.route('/messages/<message_id>', methods=['GET'])
+@jwt_required()
+def get_message(message_id):
+    try:
+        # Check if message_id is a valid ObjectId
+        object_id = ObjectId(message_id)  # This will raise an InvalidId error if invalid
+        
+        # Query the database to get the specific message
+        message = mongo.db.messages.find_one({"_id": object_id})
+        
+        if message:
+            message['_id'] = str(message['_id'])  # Convert ObjectId to string
+            return jsonify(message), 200
+        else:
+            return jsonify({"error": "Message not found"}), 404
+
+    except InvalidId:
+        return jsonify({"error": "Invalid message ID format"}), 400
     except Exception as e:
         return jsonify({"error": f"An error occurred: {str(e)}"}), 500
 
@@ -306,6 +330,9 @@ def send_messages():
 @app.route('/twilio-webhook', methods=['POST'])
 @validate_twilio_request
 def twilio_webhook():
+    print("Twilio webhook received!")
+    print("Request headers:", request.headers)
+    print("Request data:", request.form)
     try:
         data = request.form
         print("Twilio webhook received:", data)
