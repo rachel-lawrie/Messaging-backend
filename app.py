@@ -1,5 +1,11 @@
 from flask import abort, Flask, request, jsonify
-from flask_jwt_extended import JWTManager, create_access_token, jwt_required
+from flask_jwt_extended import (
+    JWTManager,
+    create_access_token,
+    create_refresh_token,
+    jwt_required,
+    get_jwt_identity,
+)
 from flask_cors import CORS
 from models import User
 from db import mongo
@@ -10,6 +16,7 @@ from twilio.base.exceptions import TwilioRestException
 from twilio.request_validator import RequestValidator
 from dotenv import load_dotenv
 from functools import wraps
+from datetime import timedelta
 import os
 from werkzeug.middleware.proxy_fix import ProxyFix
 
@@ -26,6 +33,8 @@ CORS(app, supports_credentials=True)
 
 # authentication
 app.config['JWT_SECRET_KEY'] = os.getenv('SECRET_KEY')
+app.config['JWT_ACCESS_TOKEN_EXPIRES'] = timedelta(hours=1)
+app.config['JWT_REFRESH_TOKEN_EXPIRES'] = False
 jwt = JWTManager(app)
 
 # MongoDB configuration
@@ -88,12 +97,13 @@ def register_user():
         # Create new user - this will handle all other validations
         user = User.create_user(username, password, email)
         
-        # Generate JWT token
         access_token = create_access_token(identity=str(user.id))
+        refresh_token = create_refresh_token(identity=str(user.id))
         
         return jsonify({
             "message": "User created successfully",
             "token": access_token,
+            "refresh_token": refresh_token,
             "user_id": str(user.id)
         }), 201
         
@@ -114,12 +124,22 @@ def login():
     user = User.find_by_username(username)
     if user and user.check_password(password):  # This uses the bcrypt check
         access_token = create_access_token(identity=str(user.id))
+        refresh_token = create_refresh_token(identity=str(user.id))
         return jsonify({
             "message": "Login Successful",
             "token": access_token,
+            "refresh_token": refresh_token,
             "user_id": str(user.id)
         }), 200
     return jsonify({"message": "Invalid username or password"}), 401
+
+
+@app.route('/refresh', methods=['POST'])
+@jwt_required(refresh=True)
+def refresh():
+    identity = get_jwt_identity()
+    access_token = create_access_token(identity=identity)
+    return jsonify({"token": access_token}), 200
 
     
 # Create Group
