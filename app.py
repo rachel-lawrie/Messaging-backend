@@ -89,13 +89,15 @@ def register_user():
         username = data.get('username')
         email = data.get('email')
         password = data.get('password')
+        first_name = data.get('firstName')
+        last_name = data.get('lastName')
 
         # Check if all required fields are present
-        if not username or not password or not email:
+        if not username or not password or not email or not first_name or not last_name:
             return jsonify({"message": "Missing required fields"}), 400
 
         # Create new user - this will handle all other validations
-        user = User.create_user(username, password, email)
+        user = User.create_user(username, password, email, first_name, last_name)
         
         access_token = create_access_token(identity=str(user.id))
         refresh_token = create_refresh_token(identity=str(user.id))
@@ -320,13 +322,39 @@ def send_messages():
     recipients = data.get('recipients', [])
     message_content = data.get('message', '')
     response_id = data.get('responseId', '')
+    message_id = data.get('messageId', '')
+
+    # Resolve the sender from the JWT identity (not client-supplied) so it can't be spoofed
+    sender = User.find_by_id(get_jwt_identity())
+    sender_name = ""
+    if sender:
+        sender_name = f"{sender.first_name} {sender.last_name}".strip() or sender.username
+
+    # Resolve the title from the saved message document rather than trusting the client
+    title = ""
+    if message_id:
+        try:
+            message_doc = mongo.db.messages.find_one({"_id": ObjectId(message_id)})
+            if message_doc:
+                title = message_doc.get("title", "")
+        except InvalidId:
+            title = ""
+
+    prefix = f"{sender_name} via cajAPP" if sender_name else "cajAPP"
+    if title:
+        prefix += f" - {title}"
+
+    # Ensure the message content ends with punctuation before appending the RSVP sentence
+    trimmed_content = message_content.rstrip()
+    if trimmed_content and trimmed_content[-1] not in ".!?":
+        trimmed_content += "."
 
     responses = []
-    
+
     for recipient in recipients:
         try:
             message = client.messages.create(
-                body= f"{message_content} Respond '{response_id}' to confirm your attendance.",
+                body= f"{prefix}: {trimmed_content} Respond '{response_id}' to confirm your affirmative response/attendance.",
                 messaging_service_sid=messagingServiceSid,
                 to=recipient['phoneNumber']
             )
