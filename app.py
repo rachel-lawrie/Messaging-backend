@@ -332,11 +332,20 @@ def send_messages():
 
     # Resolve the title from the saved message document rather than trusting the client
     title = ""
+    limit_text = ""
     if message_id:
         try:
             message_doc = mongo.db.messages.find_one({"_id": ObjectId(message_id)})
             if message_doc:
                 title = message_doc.get("title", "")
+                limit_value = message_doc.get("limit")
+                if limit_value:
+                    try:
+                        limit_num = int(limit_value)
+                        if limit_num > 0:
+                            limit_text = " There is 1 spot!" if limit_num == 1 else f" There are {limit_num} spots!"
+                    except (TypeError, ValueError):
+                        pass
         except InvalidId:
             title = ""
 
@@ -354,7 +363,7 @@ def send_messages():
     for recipient in recipients:
         try:
             message = client.messages.create(
-                body= f"{prefix}: {trimmed_content} Respond '{response_id}' to confirm your affirmative response/attendance.",
+                body= f"{prefix}: {trimmed_content}{limit_text} Respond '{response_id}' to confirm your affirmative response/attendance.",
                 messaging_service_sid=messagingServiceSid,
                 to=recipient['phoneNumber']
             )
@@ -412,6 +421,46 @@ def twilio_webhook():
                     {"_id": matching_message["_id"]},
                     {"$addToSet": {"responded_yes": matching_contact}}  # Add to array or create it if not present
                 )
+
+                if update_result.modified_count:
+                    updated_message = mongo.db.messages.find_one({"_id": matching_message["_id"]})
+                    limit_value = updated_message.get("limit")
+                    responded_yes = updated_message.get("responded_yes", [])
+
+                    try:
+                        limit_num = int(limit_value) if limit_value else None
+                    except (TypeError, ValueError):
+                        limit_num = None
+
+                    if limit_num and limit_num > 0 and len(responded_yes) >= limit_num:
+                        flag_result = mongo.db.messages.update_one(
+                            {"_id": updated_message["_id"], "quotaMetNotified": {"$ne": True}},
+                            {"$set": {"quotaMetNotified": True}}
+                        )
+                        if flag_result.modified_count:
+                            responded_numbers = {c["phoneNumber"] for c in responded_yes}
+                            remaining = [c for c in updated_message.get("to", []) if c.get("phoneNumber") not in responded_numbers]
+
+                            owner = User.find_by_id(updated_message.get("userID"))
+                            owner_name = ""
+                            if owner:
+                                owner_name = f"{owner.first_name} {owner.last_name}".strip() or owner.username
+
+                            quota_prefix = f"{owner_name} via cajAPP" if owner_name else "cajAPP"
+                            event_title = updated_message.get("title", "")
+                            if event_title:
+                                quota_prefix += f" - {event_title}"
+
+                            for recipient in remaining:
+                                try:
+                                    client.messages.create(
+                                        body=f"{quota_prefix} respondent quota has been met!",
+                                        messaging_service_sid=messagingServiceSid,
+                                        to=recipient["phoneNumber"]
+                                    )
+                                except Exception as e:
+                                    print(f"Error notifying {recipient.get('phoneNumber')} of quota met: {e}")
+
                 return jsonify({"message": "Contact added to responded_yes."}), 200
         
             else:
