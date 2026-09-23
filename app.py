@@ -298,19 +298,28 @@ def get_message(message_id):
     except Exception as e:
         return jsonify({"error": f"An error occurred: {str(e)}"}), 500
 
-# Delete Message
-@app.route('/messages/<title>', methods=['DELETE'])
+# Delete message by id (scoped to the requesting user)
+@app.route('/messages/<message_id>', methods=['DELETE'])
 @jwt_required()
-def delete_message(title):
+def delete_message(message_id):
     try:
-        result = mongo.db.messages.delete_one({"title": title})
-        
+        # Check if message_id is a valid ObjectId
+        object_id = ObjectId(message_id)  # This will raise an InvalidId error if invalid
+
+        # Only delete the message if it belongs to the user in the JWT, so one user
+        # can't delete another user's message. Identity is str(user.id), matching userID.
+        user_id = get_jwt_identity()
+        result = mongo.db.messages.delete_one({"_id": object_id, "userID": user_id})
+
         if result.deleted_count == 1:
             return jsonify({"message": "Message deleted successfully"}), 200
         else:
             return jsonify({"error": "Message not found"}), 404
 
+    except InvalidId:
+        return jsonify({"error": "Invalid message ID format"}), 400
     except Exception as e:
+        print("Error deleting message:", str(e))
         return jsonify({"error": "Failed to delete message"}), 500
 
 # Send message
