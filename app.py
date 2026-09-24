@@ -7,6 +7,8 @@ from flask_jwt_extended import (
     get_jwt_identity,
 )
 from flask_cors import CORS
+from flask_limiter import Limiter
+from flask_limiter.util import get_remote_address
 from models import User
 from db import mongo
 from bson import ObjectId
@@ -18,6 +20,7 @@ from dotenv import load_dotenv
 from functools import wraps
 from datetime import timedelta
 import os
+import secrets
 from werkzeug.middleware.proxy_fix import ProxyFix
 
 
@@ -34,8 +37,16 @@ CORS(app, supports_credentials=True)
 # authentication
 app.config['JWT_SECRET_KEY'] = os.getenv('SECRET_KEY')
 app.config['JWT_ACCESS_TOKEN_EXPIRES'] = timedelta(hours=1)
-app.config['JWT_REFRESH_TOKEN_EXPIRES'] = False
+app.config['JWT_REFRESH_TOKEN_EXPIRES'] = timedelta(days=30)
 jwt = JWTManager(app)
+
+# Rate limiting (in-memory backend for this single-process app)
+limiter = Limiter(
+    get_remote_address,
+    app=app,
+    default_limits=["200 per day", "50 per hour"],
+    storage_uri="memory://",
+)
 
 # MongoDB configuration
 app.config["MONGO_URI"] = os.getenv('MONGO_URI')
@@ -49,6 +60,34 @@ client = Client(account_sid, auth_token)
 messagingServiceSid = os.getenv('MESSAGING_SERVICE_SID')
 webhook_address = os.getenv('WEBHOOK_ADDRESS')
 
+MESSAGE_UPDATE_FIELDS = ("title", "message", "to", "limit", "timeSent")
+GROUP_UPDATE_FIELDS = ("groupName", "members")
+
+
+def allowlisted_fields(data, allowed):
+    """Build a dict of only allowlisted keys present in data."""
+    if not data:
+        return {}
+    return {key: data[key] for key in allowed if key in data}
+
+
+def expand_allowed_phones(to_list):
+    """Expand a message's `to` list into a set of phone numbers (groups have members)."""
+    phones = set()
+    for entry in to_list or []:
+        members = entry.get("members")
+        if members is not None:
+            for member in members:
+                phone = member.get("phoneNumber")
+                if phone:
+                    phones.add(phone)
+        else:
+            phone = entry.get("phoneNumber")
+            if phone:
+                phones.add(phone)
+    return phones
+
+
 # Validate Twilio request
 def validate_twilio_request(f):
     """Validates that incoming requests genuinely originated from Twilio"""
@@ -56,14 +95,6 @@ def validate_twilio_request(f):
     def decorated_function(*args, **kwargs):
         # Create an instance of the RequestValidator class
         validator = RequestValidator(auth_token)
-        print("token:", auth_token)
-        print("Request URL:", request.url)
-        print("Request Data:", request.form)
-        print("Twilio Signature:", request.headers.get('X-TWILIO-SIGNATURE', ''))
-        calculated_signature = validator.compute_signature(request.url, request.form)
-        print("Calculated Signature:", calculated_signature)
-        print("headers:", request.headers)
-        print("data:", request.get_data())
 
         # Validate the request using its URL, POST data,
         # and X-TWILIO-SIGNATURE header
@@ -83,6 +114,7 @@ def validate_twilio_request(f):
 # Routes
 # Register
 @app.route('/register', methods=['POST'])
+@limiter.limit("5 per minute")
 def register_user():
     try:
         data = request.json
@@ -113,11 +145,11 @@ def register_user():
         # This will catch validation errors from User.create_user
         return jsonify({"message": str(e)}), 400
     except Exception as e:
-        print(f"Error creating user: {e}")  # For debugging
         return jsonify({"message": "Error creating user"}), 500
 
 # Login
 @app.route('/login', methods=['POST'])
+@limiter.limit("5 per minute")
 def login():
     data = request.json
     username = data.get('username')
@@ -148,12 +180,15 @@ def refresh():
 @app.route('/groups', methods=['Post'])
 @jwt_required()
 def create_group():
-    data = request.json
+    data = dict(request.json or {})
+    allowed = allowlisted_fields(data, GROUP_UPDATE_FIELDS)
+    if not allowed:
+        return jsonify({"error": "No valid fields provided"}), 400
+    allowed["userID"] = get_jwt_identity()
     try:
-        result = mongo.db.groups.insert_one(data)
+        result = mongo.db.groups.insert_one(allowed)
         return jsonify({"message": "Group created successfully", "id": str(result.inserted_id)}), 201
     except Exception as e:
-        print("Error creating message:", str(e))
         return jsonify({"error": "Failed to create message"}), 500
     
 # Get groups for specific user
@@ -161,13 +196,9 @@ def create_group():
 @jwt_required()
 def get_groups():
     try:
-        # Retrieve the user_id from the query parameters
-        user_id = request.args.get('user_id')
+        user_id = get_jwt_identity()
 
-        if not user_id:
-            return jsonify({"error": "Missing user_id parameter"}), 400
-        
-        # Query the database to get all messages for this specific user
+        # Query the database to get all groups for the authenticated user
         groups = mongo.db.groups.find({"userID": user_id})
 
         # Convert the cursor to a list of dictionaries to be returned as JSON
@@ -176,11 +207,11 @@ def get_groups():
             group['_id'] = str(group['_id'])  # Convert ObjectId to string
             groups_list.append(group)
 
-        # Return the list of messages
+        # Return the list of groups
         return jsonify(groups_list), 200
 
     except Exception as e:
-        return jsonify({"error": f"An error occurred: {str(e)}"}), 500
+        return jsonify({"error": "An error occurred"}), 500
 
 # Update existing group
 @app.route('/groups/<group_id>', methods=['PUT'])
@@ -189,24 +220,27 @@ def update_group(group_id):
     try:
         # Check if group_id is a valid ObjectId
         object_id = ObjectId(group_id)  # This will raise an InvalidId error if invalid
-        print(f"Valid ObjectId: {object_id}")
 
         data = request.json
-        result = mongo.db.groups.update_one({"_id": object_id}, {"$set": data})
+        allowed = allowlisted_fields(data, GROUP_UPDATE_FIELDS)
+        if not allowed:
+            return jsonify({"error": "No valid fields provided"}), 400
+
+        user_id = get_jwt_identity()
+        result = mongo.db.groups.update_one(
+            {"_id": object_id, "userID": user_id},
+            {"$set": allowed},
+        )
         
         if result.matched_count:
-            print("Group updated successfully")
             return jsonify({"message": "Group updated successfully"}), 200
         else:
-            print("Group not found")
             return jsonify({"error": "Group not found"}), 404
 
     except InvalidId:
-        print("Invalid ObjectId format")
         return jsonify({"error": "Invalid group ID format"}), 400
 
     except Exception as e:
-        print("Error updating group:", str(e))
         return jsonify({"error": "Failed to update group"}), 500
 
 # Delete Group
@@ -229,19 +263,21 @@ def delete_group(group_id):
         return jsonify({"error": "Invalid group ID format"}), 400
 
     except Exception as e:
-        print("Error deleting group:", str(e))
         return jsonify({"error": "Failed to delete group"}), 500
 
 # Create Message
 @app.route('/messages', methods=['Post'])
 @jwt_required()
 def create_message():
-    data = request.json
+    data = dict(request.json or {})
+    allowed = allowlisted_fields(data, MESSAGE_UPDATE_FIELDS)
+    if not allowed:
+        return jsonify({"error": "No valid fields provided"}), 400
+    allowed["userID"] = get_jwt_identity()
     try:
-        result = mongo.db.messages.insert_one(data)
+        result = mongo.db.messages.insert_one(allowed)
         return jsonify({"message": "Message created successfully", "id": str(result.inserted_id)}), 201
     except Exception as e:
-        print("Error creating message:", str(e))
         return jsonify({"error": "Failed to create message"}), 500
 
 
@@ -253,24 +289,27 @@ def update_message(message_id):
     try:
         # Check if message_id is a valid ObjectId
         object_id = ObjectId(message_id)  # This will raise an InvalidId error if invalid
-        print(f"Valid ObjectId: {object_id}")
 
         data = request.json
-        result = mongo.db.messages.update_one({"_id": object_id}, {"$set": data})
+        allowed = allowlisted_fields(data, MESSAGE_UPDATE_FIELDS)
+        if not allowed:
+            return jsonify({"error": "No valid fields provided"}), 400
+
+        user_id = get_jwt_identity()
+        result = mongo.db.messages.update_one(
+            {"_id": object_id, "userID": user_id},
+            {"$set": allowed},
+        )
         
         if result.matched_count:
-            print("Message updated successfully")
             return jsonify({"message": "Message updated successfully"}), 200
         else:
-            print("Message not found")
             return jsonify({"error": "Message not found"}), 404
 
     except InvalidId:
-        print("Invalid ObjectId format")
         return jsonify({"error": "Invalid message ID format"}), 400
 
     except Exception as e:
-        print("Error updating message:", str(e))
         return jsonify({"error": "Failed to update message"}), 500
 
 # Get messages for specific user
@@ -278,13 +317,9 @@ def update_message(message_id):
 @jwt_required()
 def get_messages():
     try:
-        # Retrieve the user_id from the query parameters
-        user_id = request.args.get('user_id')
+        user_id = get_jwt_identity()
 
-        if not user_id:
-            return jsonify({"error": "Missing user_id parameter"}), 400
-        
-        # Query the database to get all messages for this specific user
+        # Query the database to get all messages for the authenticated user
         messages = mongo.db.messages.find({"userID": user_id})
 
         # Convert the cursor to a list of dictionaries to be returned as JSON
@@ -297,7 +332,7 @@ def get_messages():
         return jsonify(message_list), 200
 
     except Exception as e:
-        return jsonify({"error": f"An error occurred: {str(e)}"}), 500
+        return jsonify({"error": "An error occurred"}), 500
 
 # Get single message by ID
 @app.route('/messages/<message_id>', methods=['GET'])
@@ -306,9 +341,10 @@ def get_message(message_id):
     try:
         # Check if message_id is a valid ObjectId
         object_id = ObjectId(message_id)  # This will raise an InvalidId error if invalid
-        
-        # Query the database to get the specific message
-        message = mongo.db.messages.find_one({"_id": object_id})
+        user_id = get_jwt_identity()
+
+        # Query the database to get the specific message owned by this user
+        message = mongo.db.messages.find_one({"_id": object_id, "userID": user_id})
         
         if message:
             message['_id'] = str(message['_id'])  # Convert ObjectId to string
@@ -319,7 +355,7 @@ def get_message(message_id):
     except InvalidId:
         return jsonify({"error": "Invalid message ID format"}), 400
     except Exception as e:
-        return jsonify({"error": f"An error occurred: {str(e)}"}), 500
+        return jsonify({"error": "An error occurred"}), 500
 
 # Delete message by id (scoped to the requesting user)
 @app.route('/messages/<message_id>', methods=['DELETE'])
@@ -342,44 +378,58 @@ def delete_message(message_id):
     except InvalidId:
         return jsonify({"error": "Invalid message ID format"}), 400
     except Exception as e:
-        print("Error deleting message:", str(e))
         return jsonify({"error": "Failed to delete message"}), 500
 
 # Send message
 @app.route('/twilio', methods=['POST'])
 @jwt_required()
+@limiter.limit("10 per minute")
 def send_messages():
 
-    data = request.json
+    data = request.json or {}
     recipients = data.get('recipients', [])
     message_content = data.get('message', '')
-    response_id = data.get('responseId', '')
     message_id = data.get('messageId', '')
 
+    if not message_id:
+        return jsonify({"error": "Missing messageId"}), 400
+
+    try:
+        object_id = ObjectId(message_id)
+    except InvalidId:
+        return jsonify({"error": "Invalid message ID format"}), 400
+
+    user_id = get_jwt_identity()
+    message_doc = mongo.db.messages.find_one({"_id": object_id, "userID": user_id})
+    if not message_doc:
+        return jsonify({"error": "Message not found"}), 404
+
     # Resolve the sender from the JWT identity (not client-supplied) so it can't be spoofed
-    sender = User.find_by_id(get_jwt_identity())
+    sender = User.find_by_id(user_id)
     sender_name = ""
     if sender:
         sender_name = f"{sender.first_name} {sender.last_name}".strip() or sender.username
 
-    # Resolve the title from the saved message document rather than trusting the client
-    title = ""
+    # Title and limit come from the owned saved message document
+    title = message_doc.get("title", "")
     limit_text = ""
-    if message_id:
+    limit_value = message_doc.get("limit")
+    if limit_value:
         try:
-            message_doc = mongo.db.messages.find_one({"_id": ObjectId(message_id)})
-            if message_doc:
-                title = message_doc.get("title", "")
-                limit_value = message_doc.get("limit")
-                if limit_value:
-                    try:
-                        limit_num = int(limit_value)
-                        if limit_num > 0:
-                            limit_text = " There is 1 spot!" if limit_num == 1 else f" There are {limit_num} spots!"
-                    except (TypeError, ValueError):
-                        pass
-        except InvalidId:
-            title = ""
+            limit_num = int(limit_value)
+            if limit_num > 0:
+                limit_text = " There is 1 spot!" if limit_num == 1 else f" There are {limit_num} spots!"
+        except (TypeError, ValueError):
+            pass
+
+    # RSVP code: generate and persist if the owned document has none; ignore client value
+    response_id = message_doc.get("responseId")
+    if not response_id:
+        response_id = secrets.token_hex(4)
+        mongo.db.messages.update_one(
+            {"_id": object_id, "userID": user_id},
+            {"$set": {"responseId": response_id}},
+        )
 
     prefix = f"{sender_name} via cajAPP" if sender_name else "cajAPP"
     if title:
@@ -390,14 +440,19 @@ def send_messages():
     if trimmed_content and trimmed_content[-1] not in ".!?":
         trimmed_content += "."
 
+    allowed_phones = expand_allowed_phones(message_doc.get("to"))
     responses = []
 
     for recipient in recipients:
+        phone = recipient.get("phoneNumber")
+        if not phone or phone not in allowed_phones:
+            # Number not on the saved message — skip, do not send
+            continue
         try:
             message = client.messages.create(
                 body= f"{prefix}: {trimmed_content}{limit_text} Respond '{response_id}' to confirm your affirmative response/attendance.",
                 messaging_service_sid=messagingServiceSid,
-                to=recipient['phoneNumber']
+                to=phone
             )
 
             twilio_response = {
@@ -406,12 +461,10 @@ def send_messages():
                 "error_code": message.error_code,
                 "error_message": message.error_message,
             }
-            responses.append({"recipient": recipient["phoneNumber"], "twilio_response": twilio_response})
-            print("Message sent to:", recipient["phoneNumber"])
+            responses.append({"recipient": phone, "twilio_response": twilio_response})
 
         except Exception as e:
-            print(f"Error for {recipient['phoneNumber']}: {e}")
-            responses.append({"recipient": recipient["phoneNumber"], "error": str(e)})
+            responses.append({"recipient": phone, "error": "Failed to send"})
 
     # Return the collected responses after processing all recipients
     return {"responses": responses}, 200
@@ -419,26 +472,19 @@ def send_messages():
 @app.route('/twilio-webhook', methods=['POST'])
 @validate_twilio_request
 def twilio_webhook():
-    print("Twilio webhook received!")
-    print("Request headers:", request.headers)
-    print("Request data:", request.form)
     try:
         data = request.form
-        print("Twilio webhook received:", data)
 
         # Extract the response body
         response_body = data.get('Body', '').strip()  # Remove extra spaces
-        print("Response body:", response_body)
 
         from_number = data.get('From', '')
-        print("From:", from_number)
 
         # Query the database to check for a matching responseId
         matching_message = mongo.db.messages.find_one({"responseId": response_body})
 
         if matching_message:
 
-            print("Matching message found:", matching_message)
             # Process the matching message (e.g., update status, log response)
             matching_contact = next(
                 (contact for contact in matching_message.get("to", []) if contact["phoneNumber"] == from_number),
@@ -446,7 +492,6 @@ def twilio_webhook():
             )
 
             if matching_contact:
-                print("Matching contact found:", matching_contact)
 
                 # Use $addToSet to update or create 'responded_yes'
                 update_result = mongo.db.messages.update_one(
@@ -491,20 +536,18 @@ def twilio_webhook():
                                         to=recipient["phoneNumber"]
                                     )
                                 except Exception as e:
-                                    print(f"Error notifying {recipient.get('phoneNumber')} of quota met: {e}")
+                                    pass
 
                 return jsonify({"message": "Contact added to responded_yes."}), 200
         
             else:
-                print("No matching contact found in the 'to' array.")
                 return jsonify({"message": "No matching contact found."}), 404
         else:
-            print("No matching message found for responseId:", response_body)
             return jsonify({"message": "No matching message found."}), 404
 
     except Exception as e:
-        print("Error processing webhook:", str(e))
-        return jsonify({"error": str(e)}), 500
+        return jsonify({"error": "An error occurred"}), 500
 
 if __name__ == '__main__':
-    app.run(debug=True, host='0.0.0.0', port=5001)
+    debug = os.getenv("FLASK_DEBUG") == "1"
+    app.run(debug=debug, host='0.0.0.0', port=5001)
