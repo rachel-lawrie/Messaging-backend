@@ -129,7 +129,6 @@ class User(UserMixin):
             result = mongo.db.users.insert_one(user_data)
             return User(str(result.inserted_id), username, email, password_hash, first_name.strip(), last_name.strip())
         except Exception as e:
-            print(f"Error inserting user: {e}")
             raise ValueError("Failed to create user account")
     
     # Find methods
