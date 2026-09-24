@@ -209,6 +209,29 @@ def update_group(group_id):
         print("Error updating group:", str(e))
         return jsonify({"error": "Failed to update group"}), 500
 
+# Delete Group
+@app.route('/groups/<group_id>', methods=['DELETE'])
+@jwt_required()
+def delete_group(group_id):
+    try:
+        # Check if group_id is a valid ObjectId
+        object_id = ObjectId(group_id)  # This will raise an InvalidId error if invalid
+
+        user_id = get_jwt_identity()
+        result = mongo.db.groups.delete_one({"_id": object_id, "userID": user_id})
+
+        if result.deleted_count:
+            return jsonify({"message": "Group deleted successfully"}), 200
+        else:
+            return jsonify({"error": "Group not found"}), 404
+
+    except InvalidId:
+        return jsonify({"error": "Invalid group ID format"}), 400
+
+    except Exception as e:
+        print("Error deleting group:", str(e))
+        return jsonify({"error": "Failed to delete group"}), 500
+
 # Create Message
 @app.route('/messages', methods=['Post'])
 @jwt_required()
